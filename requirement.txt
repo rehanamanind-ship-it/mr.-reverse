@@ -1,0 +1,21 @@
+# Universal Application Converter - Requirements
+# Python 3.9 or higher required
+
+# Core dependencies (recommended)
+pefile>=2023.2.7          # Windows PE analysis
+pyelftools>=0.29          # Linux ELF analysis
+capstone>=5.0.0           # Disassembly engine
+llama-cpp-python>=0.2.0   # Local GGUF model inference (AI)
+
+# Optional dependencies (comment out if not needed)
+# androguard>=3.3.5       # Android APK analysis
+# apktool>=2.7.0          # APK decompilation (requires Java)
+
+# For compilation with Nuitka (optional, for standalone binary)
+# nuitka>=2.0.0
+
+# Notes:
+# - On Windows, you may need Microsoft Visual C++ Redistributable for some wheels.
+# - For llama-cpp-python, pre-built wheels are available for most platforms.
+#   If installation fails, refer to: https://github.com/abetlen/llama-cpp-python
+# - For GPU acceleration, install with: pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
