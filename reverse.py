@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
 """
-Universal Application Converter – Curses UI Edition
-Offline, AI‑powered reverse engineering with a full‑featured terminal interface.
-
-Features:
-- Full curses TUI with colors and dynamic resizing
-- Scrollable log window
-- Real‑time progress updates
-- Menu-driven: select input file, target language, model, toggle AI, start conversion
-- Threaded conversion engine keeps UI responsive
-- Supports all previous analysis and code generation logic
+Universal Application Converter – Curses UI (Fixed for terminal errors)
+Now all curses drawing is fully protected; handles single-character ACS constants.
 """
 
 import os
@@ -587,18 +579,16 @@ class ConverterEngine:
         return result
 
 # ===================================================================
-# Curses UI
+# Curses UI – fixed to handle ACS constants and small terminals
 # ===================================================================
 
 import curses
 import curses.textpad
 
 class CursesUI:
-    """Full curses TUI for the converter."""
+    """Full curses TUI with robust resizing and error handling."""
     def __init__(self):
         self.stdscr = None
-        self.log_queue = queue.Queue()
-        self.progress_queue = queue.Queue()
         self.running = True
         self.conversion_thread = None
 
@@ -615,7 +605,7 @@ class CursesUI:
         self.progress_stage = ""
         self.progress_percent = 0
 
-        # Colors (initialized in setup)
+        # Colors
         self.color_pairs = {}
 
     # ------------------- Color Setup -------------------
@@ -639,41 +629,125 @@ class CursesUI:
         curses.init_pair(6, curses.COLOR_MAGENTA, -1)
         curses.init_pair(7, curses.COLOR_BLUE, -1)
 
+    # ------------------- Safe drawing helpers -------------------
+    def _safe_addstr(self, y, x, text, attr=0, max_width=None):
+        """Add a string or single character safely."""
+        if self.stdscr is None:
+            return
+        try:
+            height, width = self.stdscr.getmaxyx()
+        except curses.error:
+            return
+        if y < 0 or y >= height or x < 0 or x >= width:
+            return
+
+        # Handle single character (ACS constant or int)
+        if isinstance(text, int):
+            try:
+                if attr:
+                    self.stdscr.attron(attr)
+                self.stdscr.addch(y, x, text)
+                if attr:
+                    self.stdscr.attroff(attr)
+            except curses.error:
+                pass
+            return
+
+        # String handling
+        if max_width is None:
+            max_width = width - x
+        if max_width <= 0:
+            return
+        if len(text) > max_width:
+            text = text[:max_width-1] + '…'
+        try:
+            if attr:
+                self.stdscr.attron(attr)
+            self.stdscr.addstr(y, x, text)
+            if attr:
+                self.stdscr.attroff(attr)
+        except curses.error:
+            pass
+
+    def _safe_addch(self, y, x, ch, attr=0):
+        """Add a single character safely."""
+        self._safe_addstr(y, x, ch, attr)
+
+    def _safe_hline(self, y, x, ch, n):
+        """Draw a horizontal line safely."""
+        if self.stdscr is None or n <= 0:
+            return
+        try:
+            height, width = self.stdscr.getmaxyx()
+        except curses.error:
+            return
+        if y < 0 or y >= height or x < 0 or x >= width:
+            return
+        max_len = width - x
+        if n > max_len:
+            n = max_len
+        try:
+            self.stdscr.hline(y, x, ch, n)
+        except curses.error:
+            pass
+
+    def _safe_vline(self, y, x, ch, n):
+        """Draw a vertical line safely."""
+        if self.stdscr is None or n <= 0:
+            return
+        try:
+            height, width = self.stdscr.getmaxyx()
+        except curses.error:
+            return
+        if y < 0 or y >= height or x < 0 or x >= width:
+            return
+        max_len = height - y
+        if n > max_len:
+            n = max_len
+        try:
+            self.stdscr.vline(y, x, ch, n)
+        except curses.error:
+            pass
+
     # ------------------- Drawing -------------------
     def draw(self):
+        if self.stdscr is None:
+            return
+        try:
+            height, width = self.stdscr.getmaxyx()
+        except curses.error:
+            return
+
+        # Minimum size check
+        if height < 10 or width < 40:
+            self.stdscr.clear()
+            self._safe_addstr(0, 0, "Terminal too small. Resize to at least 40x10.")
+            self.stdscr.refresh()
+            return
+
         self.stdscr.clear()
-        height, width = self.stdscr.getmaxyx()
 
         # Header
         header = " Universal Application Converter - Offline AI "
-        self.stdscr.attron(curses.color_pair(self.color_pairs['header']) | curses.A_BOLD)
-        self.stdscr.addstr(0, 0, header.ljust(width))
-        self.stdscr.attroff(curses.color_pair(self.color_pairs['header']) | curses.A_BOLD)
-        self.stdscr.hline(1, 0, curses.ACS_HLINE, width)
+        self._safe_addstr(0, 0, header, curses.color_pair(self.color_pairs['header']) | curses.A_BOLD)
+        self._safe_hline(1, 0, curses.ACS_HLINE, width)
 
-        # Main area: split into left (menu) and right (log + progress)
-        # We'll use two columns: left 30% for menu, right for log.
+        # Left menu
         left_width = max(30, int(width * 0.30))
         right_width = width - left_width - 1
 
-        # Left menu
         menu_y = 2
-        self.stdscr.attron(curses.color_pair(self.color_pairs['highlight']) | curses.A_BOLD)
-        self.stdscr.addstr(menu_y, 0, " SETTINGS ")
-        self.stdscr.attroff(curses.color_pair(self.color_pairs['highlight']) | curses.A_BOLD)
+        self._safe_addstr(menu_y, 0, " SETTINGS ", curses.color_pair(self.color_pairs['highlight']) | curses.A_BOLD)
         menu_y += 1
 
         def menu_item(label, value, color='normal'):
             nonlocal menu_y
-            if color != 'normal':
-                self.stdscr.attron(curses.color_pair(self.color_pairs[color]))
-            self.stdscr.addstr(menu_y, 0, f"{label}: ")
-            if color != 'normal':
-                self.stdscr.attroff(curses.color_pair(self.color_pairs[color]))
-            self.stdscr.addstr(menu_y, len(label)+2, f"{value}".ljust(left_width - len(label) - 3))
+            if menu_y >= height - 7:
+                return
+            self._safe_addstr(menu_y, 0, f"{label}: ", curses.color_pair(self.color_pairs[color]))
+            self._safe_addstr(menu_y, len(label)+2, str(value)[:left_width - len(label) - 3])
             menu_y += 1
 
-        # Show settings
         menu_item("App", self.app_path or "(not set)", 'warning' if not self.app_path else 'normal')
         menu_item("Target", self.target_lang)
         menu_item("Model", self.model_path)
@@ -681,62 +755,58 @@ class CursesUI:
         menu_item("Output", self.output_dir)
 
         menu_y += 1
-        self.stdscr.addstr(menu_y, 0, " [A] Select App ")
-        self.stdscr.addstr(menu_y+1, 0, " [T] Target Language ")
-        self.stdscr.addstr(menu_y+2, 0, " [M] Model File ")
-        self.stdscr.addstr(menu_y+3, 0, " [I] Toggle AI ")
-        self.stdscr.addstr(menu_y+4, 0, " [O] Output Dir ")
-        self.stdscr.addstr(menu_y+5, 0, " [S] Start Conversion ")
-        self.stdscr.addstr(menu_y+6, 0, " [Q] Quit ")
+        if menu_y + 6 < height:
+            self._safe_addstr(menu_y, 0, " [A] Select App ")
+            self._safe_addstr(menu_y+1, 0, " [T] Target Language ")
+            self._safe_addstr(menu_y+2, 0, " [M] Model File ")
+            self._safe_addstr(menu_y+3, 0, " [I] Toggle AI ")
+            self._safe_addstr(menu_y+4, 0, " [O] Output Dir ")
+            self._safe_addstr(menu_y+5, 0, " [S] Start Conversion ")
+            self._safe_addstr(menu_y+6, 0, " [Q] Quit ")
 
-        # Right side: progress bar and log
+        # Right side: log and progress
         log_x = left_width + 1
         log_y = 2
-        log_height = height - 7  # leave room for progress bar
+        log_height = height - 7
+        if log_height < 4:
+            log_height = 4
 
-        # Draw a border around log area
-        if log_height > 0 and right_width > 10:
-            self.stdscr.attron(curses.color_pair(self.color_pairs['normal']))
-            self.stdscr.vline(log_y, log_x, curses.ACS_VLINE, log_height)
-            self.stdscr.addch(log_y, log_x, curses.ACS_ULCORNER)
-            self.stdscr.addch(log_y+log_height-1, log_x, curses.ACS_LLCORNER)
-            self.stdscr.addch(log_y, log_x+right_width-1, curses.ACS_URCORNER)
-            self.stdscr.addch(log_y+log_height-1, log_x+right_width-1, curses.ACS_LRCORNER)
-            self.stdscr.hline(log_y, log_x+1, curses.ACS_HLINE, right_width-2)
-            self.stdscr.hline(log_y+log_height-1, log_x+1, curses.ACS_HLINE, right_width-2)
-            # log window content
-            log_inner = curses.newwin(log_height-2, right_width-2, log_y+1, log_x+1)
-            log_inner.attron(curses.color_pair(self.color_pairs['normal']))
-            # Show log lines (scrollable)
-            start = max(0, len(self.log_lines) - (log_height-2))
-            for i, line in enumerate(self.log_lines[start:]):
-                if i < log_height-2:
-                    try:
-                        log_inner.addstr(i, 0, line[:right_width-2])
-                    except:
-                        pass
-            log_inner.refresh()
+        if right_width > 10 and log_height > 2:
+            # Border
+            self._safe_vline(log_y, log_x, curses.ACS_VLINE, log_height)
+            self._safe_vline(log_y, log_x+right_width-1, curses.ACS_VLINE, log_height)
+            self._safe_hline(log_y, log_x+1, curses.ACS_HLINE, right_width-2)
+            self._safe_hline(log_y+log_height-1, log_x+1, curses.ACS_HLINE, right_width-2)
+            self._safe_addstr(log_y, log_x, curses.ACS_ULCORNER)
+            self._safe_addstr(log_y, log_x+right_width-1, curses.ACS_URCORNER)
+            self._safe_addstr(log_y+log_height-1, log_x, curses.ACS_LLCORNER)
+            self._safe_addstr(log_y+log_height-1, log_x+right_width-1, curses.ACS_LRCORNER)
 
-        # Progress bar at bottom
+            # Log text
+            inner_h = log_height - 2
+            inner_w = right_width - 2
+            start = max(0, len(self.log_lines) - inner_h)
+            for i in range(min(inner_h, len(self.log_lines) - start)):
+                line = self.log_lines[start + i]
+                self._safe_addstr(log_y+1+i, log_x+1, line, max_width=inner_w)
+
+        # Progress bar
         prog_y = height - 3
-        if self.progress_percent > 0:
+        if self.progress_percent > 0 and right_width > 10:
             bar_len = right_width - 4
             filled = int(bar_len * self.progress_percent / 100)
             bar = '[' + '#' * filled + '-' * (bar_len - filled) + ']'
-            self.stdscr.attron(curses.color_pair(self.color_pairs['progress']) | curses.A_BOLD)
-            self.stdscr.addstr(prog_y, log_x+1, f"{self.progress_stage}: {bar} {self.progress_percent}%")
-            self.stdscr.attroff(curses.color_pair(self.color_pairs['progress']) | curses.A_BOLD)
+            self._safe_addstr(prog_y, log_x+1, f"{self.progress_stage}: {bar} {self.progress_percent}%",
+                             curses.color_pair(self.color_pairs['progress']) | curses.A_BOLD, right_width-2)
         else:
-            self.stdscr.addstr(prog_y, log_x+1, "Ready.")
+            self._safe_addstr(prog_y, log_x+1, "Ready.")
 
         # Status line
         status_y = height - 1
         status = "Press 'S' to start conversion, 'Q' to quit."
         if self.conversion_in_progress:
             status = "Conversion in progress... please wait."
-        self.stdscr.attron(curses.color_pair(self.color_pairs['highlight']))
-        self.stdscr.addstr(status_y, 0, status.ljust(width))
-        self.stdscr.attroff(curses.color_pair(self.color_pairs['highlight']))
+        self._safe_addstr(status_y, 0, status, curses.color_pair(self.color_pairs['highlight']), width)
 
         self.stdscr.refresh()
 
@@ -847,12 +917,11 @@ class CursesUI:
     # ------------------- Main Loop -------------------
     def run(self, stdscr):
         self.stdscr = stdscr
-        curses.curs_set(0)  # hide cursor
+        curses.curs_set(0)
         self.init_colors()
 
         while self.running:
             self.draw()
-            # Check for window resize (KEY_RESIZE)
             try:
                 key = self.stdscr.getch()
             except KeyboardInterrupt:
@@ -862,11 +931,8 @@ class CursesUI:
             if key != -1:
                 self.handle_input(key)
 
-            # Process any pending log/progress messages (already handled via callbacks)
-            # The callbacks directly update the log_lines and progress variables.
-            time.sleep(0.1)  # small delay to reduce CPU
+            time.sleep(0.1)
 
-        # Cleanup
         self.stdscr.clear()
         self.stdscr.addstr(0, 0, "Goodbye!")
         self.stdscr.refresh()
