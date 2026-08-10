@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-Universal Application Converter – Offline, AI‑powered reverse engineering and code generation.
+Universal Application Converter – Curses UI Edition
+Offline, AI‑powered reverse engineering with a full‑featured terminal interface.
 
-Modular, decoupled, DRY, and easy to change.
-MADE BY ONLY AND ONLY REHAN AMAN
+Features:
+- Full curses TUI with colors and dynamic resizing
+- Scrollable log window
+- Real‑time progress updates
+- Menu-driven: select input file, target language, model, toggle AI, start conversion
+- Threaded conversion engine keeps UI responsive
+- Supports all previous analysis and code generation logic
 """
 
 import os
@@ -14,15 +20,17 @@ import subprocess
 import tempfile
 import shutil
 import logging
+import threading
+import queue
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field
 import hashlib
-import time
 
-# ------------------------------
-# Optional imports with graceful fallback
-# ------------------------------
+# ===================================================================
+# Optional imports with graceful fallback (for the engine)
+# ===================================================================
 try:
     import pefile
 except ImportError:
@@ -43,22 +51,13 @@ try:
 except ImportError:
     Llama = None
 
-# ------------------------------
-# Logging setup
-# ------------------------------
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
-    logger.addHandler(ch)
+# ===================================================================
+# Core Converter Engine – reuses the modular design from previous version
+# ===================================================================
 
-# ------------------------------
-# Constants and type definitions
-# ------------------------------
 @dataclass
 class AnalysisResult:
-    """Container for all analysis data gathered about an application."""
+    """Container for all analysis data."""
     file_type: str = ""
     architecture: str = ""
     imports: List[str] = field(default_factory=list)
@@ -75,14 +74,9 @@ class AnalysisResult:
     full_analysis: str = ""
     confidence: float = 0.0
 
-# ------------------------------
-# 1. File Identifier
-# ------------------------------
+
 class FileIdentifier:
-    """
-    Detects the file type and architecture from magic bytes and extension.
-    """
-    # Magic signatures: (hex prefix) -> (type, architecture)
+    """Detects file type and architecture from magic bytes and extension."""
     MAGIC_SIGNATURES = {
         '4d5a': ('PE', 'Windows'),
         '7f454c': ('ELF', 'Linux'),
@@ -103,57 +97,26 @@ class FileIdentifier:
 
     @classmethod
     def identify(cls, file_path: str) -> Tuple[str, str]:
-        """
-        Identify file type and architecture.
-
-        Args:
-            file_path: Path to the application file.
-
-        Returns:
-            (file_type, architecture) as strings.
-        """
         if not os.path.exists(file_path):
             return ("Unknown", "Unknown")
-
-        # Read magic bytes
         try:
             with open(file_path, 'rb') as f:
                 magic = f.read(16).hex()
         except Exception:
             return ("Unknown", "Unknown")
-
-        # Check signatures
         for sig, (ftype, arch) in cls.MAGIC_SIGNATURES.items():
             if magic.startswith(sig):
                 return (ftype, arch)
-
-        # Check extension
         ext = Path(file_path).suffix.lower()
         if ext in cls.EXT_MAP:
             return cls.EXT_MAP[ext]
-
         return ("Unknown", "Unknown")
 
-# ------------------------------
-# 2. Static Analyzer
-# ------------------------------
+
 class StaticAnalyzer:
-    """
-    Extracts static information (imports, strings, sections, entry points)
-    using pluggable backends for different file types.
-    """
+    """Extracts static information from the file."""
     @classmethod
     def analyze(cls, file_path: str, file_type: str) -> Dict:
-        """
-        Perform static analysis on the given file.
-
-        Args:
-            file_path: Path to the file.
-            file_type: Detected file type (from FileIdentifier).
-
-        Returns:
-            Dict with keys: imports, exports, strings, sections, entry_points.
-        """
         result = {
             'imports': [],
             'exports': [],
@@ -161,11 +124,7 @@ class StaticAnalyzer:
             'sections': [],
             'entry_points': []
         }
-
-        # Always try to extract ASCII strings
         result['strings'] = cls._extract_strings(file_path, limit=200)
-
-        # Dispatch to specific analyzers
         if file_type == 'PE':
             cls._analyze_pe(file_path, result)
         elif file_type == 'ELF':
@@ -174,14 +133,10 @@ class StaticAnalyzer:
             cls._analyze_python(file_path, result)
         elif file_type == 'JavaScript':
             cls._analyze_javascript(file_path, result)
-        # Add more types here as needed (e.g., JAR, APK)
-
         return result
 
-    # ---- Internal helper methods ----
     @staticmethod
     def _extract_strings(file_path: str, limit: int = 200) -> List[str]:
-        """Extract printable ASCII strings from binary."""
         strings = []
         try:
             with open(file_path, 'rb') as f:
@@ -194,33 +149,28 @@ class StaticAnalyzer:
 
     @staticmethod
     def _analyze_pe(file_path: str, result: Dict):
-        """PE (Windows) specific analysis."""
         if pefile is None:
             return
         try:
             pe = pefile.PE(file_path)
-            # Imports
             if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
                 for entry in pe.DIRECTORY_ENTRY_IMPORT:
                     dll = entry.dll.decode('utf-8', errors='ignore')
                     for imp in entry.imports:
                         if imp.name:
                             result['imports'].append(f"{dll}:{imp.name.decode('utf-8', errors='ignore')}")
-            # Sections
             for sec in pe.sections:
                 result['sections'].append({
                     'name': sec.Name.decode('utf-8', errors='ignore').strip('\x00'),
                     'size': sec.SizeOfRawData,
                     'virtual_size': sec.Misc_VirtualSize
                 })
-            # Entry point
             result['entry_points'].append(hex(pe.OPTIONAL_HEADER.AddressOfEntryPoint))
-        except Exception as e:
-            logger.debug(f"PE analysis error: {e}")
+        except Exception:
+            pass
 
     @staticmethod
     def _analyze_elf(file_path: str, result: Dict):
-        """ELF (Linux) specific analysis."""
         if ELFFile is None:
             return
         try:
@@ -237,17 +187,15 @@ class StaticAnalyzer:
                         for sym in dyn.iter_symbols():
                             if sym.name:
                                 result['imports'].append(sym.name)
-        except Exception as e:
-            logger.debug(f"ELF analysis error: {e}")
+        except Exception:
+            pass
 
     @staticmethod
     def _analyze_python(file_path: str, result: Dict):
-        """Python source or bytecode analysis."""
         try:
             if file_path.endswith('.py'):
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     code = f.read()
-                # Simple AST parsing (optional)
                 try:
                     import ast
                     tree = ast.parse(code)
@@ -260,57 +208,34 @@ class StaticAnalyzer:
                                 result['imports'].append(node.module)
                 except Exception:
                     pass
-            # For .pyc, we could use dis, but skip for now
-        except Exception as e:
-            logger.debug(f"Python analysis error: {e}")
+        except Exception:
+            pass
 
     @staticmethod
     def _analyze_javascript(file_path: str, result: Dict):
-        """JavaScript source analysis."""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 code = f.read()
-            # Find requires and imports
             imports = re.findall(r'require\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code)
             imports += re.findall(r'import\s+.*?from\s+[\'"]([^\'"]+)[\'"]', code)
-            result['imports'] = list(set(imports))  # deduplicate
-        except Exception as e:
-            logger.debug(f"JavaScript analysis error: {e}")
+            result['imports'] = list(set(imports))
+        except Exception:
+            pass
 
-# ------------------------------
-# 3. Dynamic Analyzer
-# ------------------------------
+
 class DynamicAnalyzer:
-    """
-    Optional runtime analysis (sandboxed execution). Currently supports Linux strace.
-    """
+    """Optional runtime analysis (Linux strace)."""
     @classmethod
     def analyze(cls, file_path: str, file_type: str, timeout: int = 5) -> Dict:
-        """
-        Run the application in a sandbox and capture system/API calls.
-
-        Args:
-            file_path: Path to the executable.
-            file_type: Detected file type.
-            timeout: Maximum seconds to run.
-
-        Returns:
-            Dict with key 'calls' (list of captured call strings).
-        """
         result = {'calls': []}
         if file_type not in ('PE', 'ELF', 'Python Source', 'JavaScript'):
             return result
-
-        # Linux ELF: use strace
         if sys.platform.startswith('linux') and file_type == 'ELF':
             result['calls'] = cls._strace_analysis(file_path, timeout)
-        # Windows: could use API Monitor, but not implemented here
-        # Others: skip
         return result
 
     @staticmethod
     def _strace_analysis(file_path: str, timeout: int) -> List[str]:
-        """Run strace and capture file/network/process calls."""
         calls = []
         try:
             with tempfile.NamedTemporaryFile(mode='w+') as f:
@@ -322,76 +247,44 @@ class DynamicAnalyzer:
                     proc.kill()
                 f.seek(0)
                 lines = f.read().splitlines()
-                # Filter lines containing interesting calls
                 for line in lines[:50]:
                     if any(k in line for k in ('open', 'read', 'write', 'connect', 'send', 'recv')):
                         calls.append(line.strip())
-        except Exception as e:
-            logger.debug(f"strace analysis error: {e}")
+        except Exception:
+            pass
         return calls
 
-# ------------------------------
-# 4. AI Analyzer
-# ------------------------------
-class AIAnalyzer:
-    """
-    Uses a local GGUF LLM to understand application behavior and generate code.
-    """
-    def __init__(self, model_path: str, verbose: bool = False):
-        """
-        Initialize the LLM.
 
-        Args:
-            model_path: Path to the .gguf model file.
-            verbose: Whether to log extra info.
-        """
+class AIAnalyzer:
+    """Local GGUF model for behavior analysis and code generation."""
+    def __init__(self, model_path: str):
         self.model_path = model_path
-        self.verbose = verbose
         self.llm = None
         self._load_model()
 
     def _load_model(self):
-        """Load the GGUF model with llama-cpp-python."""
         if Llama is None:
-            logger.error("llama-cpp-python not installed. Install with: pip install llama-cpp-python")
             return
         if not os.path.exists(self.model_path):
-            logger.error(f"Model file not found: {self.model_path}")
             return
         try:
             self.llm = Llama(
                 model_path=self.model_path,
                 n_ctx=4096,
                 n_threads=4,
-                n_gpu_layers=-1,   # auto GPU offload
+                n_gpu_layers=-1,
                 verbose=False
             )
-            logger.info("✅ Local GGUF model loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+        except Exception:
             self.llm = None
 
     def is_available(self) -> bool:
-        """Check if AI is ready to use."""
         return self.llm is not None
 
     def analyze_behavior(self, static: Dict, dynamic: Dict, file_type: str) -> Dict:
-        """
-        Use the LLM to infer purpose, algorithms, data structures, etc.
-
-        Args:
-            static: Result from StaticAnalyzer.
-            dynamic: Result from DynamicAnalyzer.
-            file_type: Detected file type.
-
-        Returns:
-            Dict with keys: purpose, algorithms, data_structures, dependencies,
-                             architecture_desc, confidence, full_analysis.
-        """
         if not self.is_available():
             return self._fallback_analysis(static)
 
-        # Build prompt
         context = f"""
 You are a reverse engineering expert. Analyze the following application based on extracted information.
 
@@ -411,7 +304,6 @@ Dependencies: (list key external libraries/frameworks)
 Architecture: (client-server, MVC, monolithic, etc.)
 Confidence: (a number between 0.0 and 1.0 indicating how certain you are)
 """
-        logger.info("🧠 Sending to local AI for behavior analysis...")
         try:
             response = self.llm(
                 context,
@@ -421,8 +313,7 @@ Confidence: (a number between 0.0 and 1.0 indicating how certain you are)
                 echo=False
             )
             text = response['choices'][0]['text'].strip()
-        except Exception as e:
-            logger.error(f"AI analysis failed: {e}")
+        except Exception:
             return self._fallback_analysis(static)
 
         parsed = self._parse_ai_response(text)
@@ -430,16 +321,6 @@ Confidence: (a number between 0.0 and 1.0 indicating how certain you are)
         return parsed
 
     def generate_code(self, analysis: Dict, target_lang: str) -> Dict[str, str]:
-        """
-        Generate source code in the target language using the LLM.
-
-        Args:
-            analysis: Result from analyze_behavior (or similar dict).
-            target_lang: Target programming language (e.g., 'python').
-
-        Returns:
-            Dict mapping filenames to code strings.
-        """
         if not self.is_available():
             return self._fallback_code_generation(analysis, target_lang)
 
@@ -464,7 +345,6 @@ Requirements:
 Return the code as a single block, but indicate file names with comments like:
 # === filename.py ===
 """
-        logger.info(f"🧠 Generating {target_lang} code via AI...")
         try:
             response = self.llm(
                 prompt,
@@ -474,17 +354,13 @@ Return the code as a single block, but indicate file names with comments like:
                 echo=False
             )
             code = response['choices'][0]['text'].strip()
-        except Exception as e:
-            logger.error(f"AI code generation failed: {e}")
+        except Exception:
             return self._fallback_code_generation(analysis, target_lang)
 
-        # Parse into files
         return self._split_code_into_files(code)
 
-    # ---- Internal helpers ----
     @staticmethod
     def _parse_ai_response(text: str) -> Dict:
-        """Extract structured fields from AI response."""
         result = {
             'purpose': '',
             'algorithms': '',
@@ -494,7 +370,6 @@ Return the code as a single block, but indicate file names with comments like:
             'confidence': 0.5,
             'full_analysis': ''
         }
-        # Regex extraction
         purpose_match = re.search(r'Purpose:\s*(.+?)(?=\n|$)', text, re.I)
         if purpose_match:
             result['purpose'] = purpose_match.group(1).strip()
@@ -521,11 +396,8 @@ Return the code as a single block, but indicate file names with comments like:
 
     @staticmethod
     def _fallback_analysis(static: Dict) -> Dict:
-        """Heuristic analysis when AI is unavailable."""
         imports = static.get('imports', [])
         strings = static.get('strings', [])
-        all_text = ' '.join(imports + strings)
-
         result = {
             'purpose': 'Unknown',
             'algorithms': 'Unknown',
@@ -535,8 +407,7 @@ Return the code as a single block, but indicate file names with comments like:
             'confidence': 0.3,
             'full_analysis': ''
         }
-
-        # Heuristic classification
+        all_text = ' '.join(imports + strings)
         if any('crypto' in s or 'encrypt' in s or 'decrypt' in s for s in strings):
             result['purpose'] = 'Cryptography/Encryption'
         elif any('socket' in s or 'http' in s or 'url' in s for s in strings):
@@ -551,7 +422,6 @@ Return the code as a single block, but indicate file names with comments like:
 
     @staticmethod
     def _fallback_code_generation(analysis: Dict, target_lang: str) -> Dict[str, str]:
-        """Template-based code generation when AI fails."""
         templates = {
             'python': {
                 'main.py': '''"""
@@ -602,7 +472,6 @@ public class Main {
 
     @staticmethod
     def _split_code_into_files(code: str) -> Dict[str, str]:
-        """Split a multi-file code block into separate files based on markers."""
         files = {}
         current_file = None
         current_content = []
@@ -618,8 +487,7 @@ public class Main {
         if current_file:
             files[current_file] = '\n'.join(current_content)
         elif current_content:
-            # No markers – treat as main file
-            main_name = 'main.py'  # default
+            main_name = 'main.py'
             if 'javascript' in code.lower():
                 main_name = 'app.js'
             elif 'java' in code.lower():
@@ -627,85 +495,53 @@ public class Main {
             files[main_name] = '\n'.join(current_content)
         return files
 
-# ------------------------------
-# 5. Code Generator (Wrapper)
-# ------------------------------
-class CodeGenerator:
-    """
-    Facade for code generation (AI or traditional).
-    """
-    def __init__(self, ai_analyzer: AIAnalyzer):
-        self.ai_analyzer = ai_analyzer
 
-    def generate(self, analysis: Dict, target_lang: str) -> Dict[str, str]:
-        """
-        Generate code using AI if available, else fallback to templates.
-
-        Args:
-            analysis: Analysis result dict.
-            target_lang: Target language.
-
-        Returns:
-            Dict mapping filenames to code strings.
-        """
-        if self.ai_analyzer.is_available():
-            return self.ai_analyzer.generate_code(analysis, target_lang)
-        else:
-            return self.ai_analyzer._fallback_code_generation(analysis, target_lang)
-
-# ------------------------------
-# 6. Main Converter (Orchestrator)
-# ------------------------------
-class AppConverter:
-    """
-    Orchestrates the entire conversion pipeline:
-    identify → static analyze → dynamic analyze → AI understand → generate code → save.
-    """
-    def __init__(self, model_path: str, use_ai: bool = True, verbose: bool = False):
-        """
-        Args:
-            model_path: Path to GGUF model file.
-            use_ai: Whether to enable AI (if False, skip AI entirely).
-            verbose: Enable detailed logging.
-        """
-        if verbose:
-            logger.setLevel(logging.DEBUG)
+class ConverterEngine:
+    """Orchestrates the conversion pipeline."""
+    def __init__(self, model_path: str, use_ai: bool = True):
         self.use_ai = use_ai
         self.ai_analyzer = AIAnalyzer(model_path) if use_ai else None
-        self.code_generator = CodeGenerator(self.ai_analyzer) if use_ai else None
-        self.file_identifier = FileIdentifier()
-        self.static_analyzer = StaticAnalyzer()
-        self.dynamic_analyzer = DynamicAnalyzer()
 
-    def convert(self, app_path: str, target_lang: str = "python", output_dir: str = "output") -> Dict:
+    def convert(self, app_path: str, target_lang: str, output_dir: str,
+                progress_callback: Callable[[str, float], None],
+                log_callback: Callable[[str], None]) -> Dict:
         """
-        Run full conversion pipeline.
-
-        Args:
-            app_path: Path to the input application file.
-            target_lang: Desired output language.
-            output_dir: Directory to save generated code.
-
-        Returns:
-            Dict with keys: analysis, files, metadata.
+        Run the full conversion.
+        progress_callback: (stage, percent) where stage is a string and percent 0-100.
+        log_callback: (message) for informational logs.
+        Returns a dict with analysis, files, metadata.
         """
-        logger.info(f"Starting conversion of {app_path} → {target_lang}")
+        def log(msg):
+            log_callback(msg)
+
+        def progress(stage, pct):
+            progress_callback(stage, pct)
+
+        log("Starting conversion...")
+        progress("Initializing", 0)
 
         # 1. Identify
-        file_type, arch = self.file_identifier.identify(app_path)
-        logger.info(f"Identified: {file_type} ({arch})")
+        file_type, arch = FileIdentifier.identify(app_path)
+        log(f"Identified: {file_type} ({arch})")
+        progress("Identification", 10)
 
-        # 2. Static analysis
-        static = self.static_analyzer.analyze(app_path, file_type)
-        logger.info(f"Static: {len(static['imports'])} imports, {len(static['strings'])} strings")
+        # 2. Static
+        static = StaticAnalyzer.analyze(app_path, file_type)
+        log(f"Static: {len(static['imports'])} imports, {len(static['strings'])} strings")
+        progress("Static analysis", 30)
 
-        # 3. Dynamic analysis (optional, only if safe)
-        dynamic = self.dynamic_analyzer.analyze(app_path, file_type)
+        # 3. Dynamic (optional)
+        dynamic = DynamicAnalyzer.analyze(app_path, file_type)
+        if dynamic.get('calls'):
+            log(f"Dynamic: captured {len(dynamic['calls'])} calls")
+        progress("Dynamic analysis", 50)
 
         # 4. AI understanding
         if self.use_ai and self.ai_analyzer and self.ai_analyzer.is_available():
+            log("Running AI behavior analysis...")
             analysis = self.ai_analyzer.analyze_behavior(static, dynamic, file_type)
         else:
+            log("Using heuristic analysis (no AI)")
             analysis = self.ai_analyzer._fallback_analysis(static) if self.ai_analyzer else {
                 'purpose': 'Unknown',
                 'algorithms': 'Unknown',
@@ -715,18 +551,27 @@ class AppConverter:
                 'confidence': 0.3,
                 'full_analysis': ''
             }
+        log(f"Purpose inferred: {analysis.get('purpose', 'Unknown')}")
+        progress("AI analysis", 70)
 
         # 5. Code generation
-        if self.code_generator:
-            code_files = self.code_generator.generate(analysis, target_lang)
+        log(f"Generating {target_lang} code...")
+        if self.use_ai and self.ai_analyzer and self.ai_analyzer.is_available():
+            code_files = self.ai_analyzer.generate_code(analysis, target_lang)
         else:
-            # Fallback if no AI at all
-            code_files = self.ai_analyzer._fallback_code_generation(analysis, target_lang)
+            code_files = self.ai_analyzer._fallback_code_generation(analysis, target_lang) if self.ai_analyzer else {}
+        progress("Code generation", 90)
 
         # 6. Save files
-        self._save_files(code_files, output_dir)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        for fname, content in code_files.items():
+            path = Path(output_dir) / fname
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            log(f"Written: {path}")
+        progress("Saving", 100)
 
-        return {
+        result = {
             'analysis': analysis,
             'files': code_files,
             'metadata': {
@@ -738,62 +583,306 @@ class AppConverter:
                 'confidence': analysis.get('confidence', 0.0)
             }
         }
+        log("Conversion complete!")
+        return result
 
-    @staticmethod
-    def _save_files(files: Dict[str, str], output_dir: str):
-        """Write generated files to disk."""
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-        for fname, content in files.items():
-            path = Path(output_dir) / fname
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            logger.info(f"✅ Written: {path}")
+# ===================================================================
+# Curses UI
+# ===================================================================
 
-# ------------------------------
-# CLI Entry Point
-# ------------------------------
+import curses
+import curses.textpad
+
+class CursesUI:
+    """Full curses TUI for the converter."""
+    def __init__(self):
+        self.stdscr = None
+        self.log_queue = queue.Queue()
+        self.progress_queue = queue.Queue()
+        self.running = True
+        self.conversion_thread = None
+
+        # State
+        self.app_path = ""
+        self.target_lang = "python"
+        self.model_path = "codellama-7b-instruct.Q4_K_M.gguf"
+        self.use_ai = True
+        self.output_dir = "./converted"
+        self.conversion_result = None
+        self.conversion_in_progress = False
+        self.log_lines = []
+        self.max_log_lines = 1000
+        self.progress_stage = ""
+        self.progress_percent = 0
+
+        # Colors (initialized in setup)
+        self.color_pairs = {}
+
+    # ------------------- Color Setup -------------------
+    def init_colors(self):
+        curses.start_color()
+        curses.use_default_colors()
+        self.color_pairs = {
+            'normal': 1,
+            'header': 2,
+            'highlight': 3,
+            'success': 4,
+            'error': 5,
+            'warning': 6,
+            'progress': 7,
+        }
+        curses.init_pair(1, curses.COLOR_WHITE, -1)
+        curses.init_pair(2, curses.COLOR_CYAN, -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_GREEN, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(6, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(7, curses.COLOR_BLUE, -1)
+
+    # ------------------- Drawing -------------------
+    def draw(self):
+        self.stdscr.clear()
+        height, width = self.stdscr.getmaxyx()
+
+        # Header
+        header = " Universal Application Converter - Offline AI "
+        self.stdscr.attron(curses.color_pair(self.color_pairs['header']) | curses.A_BOLD)
+        self.stdscr.addstr(0, 0, header.ljust(width))
+        self.stdscr.attroff(curses.color_pair(self.color_pairs['header']) | curses.A_BOLD)
+        self.stdscr.hline(1, 0, curses.ACS_HLINE, width)
+
+        # Main area: split into left (menu) and right (log + progress)
+        # We'll use two columns: left 30% for menu, right for log.
+        left_width = max(30, int(width * 0.30))
+        right_width = width - left_width - 1
+
+        # Left menu
+        menu_y = 2
+        self.stdscr.attron(curses.color_pair(self.color_pairs['highlight']) | curses.A_BOLD)
+        self.stdscr.addstr(menu_y, 0, " SETTINGS ")
+        self.stdscr.attroff(curses.color_pair(self.color_pairs['highlight']) | curses.A_BOLD)
+        menu_y += 1
+
+        def menu_item(label, value, color='normal'):
+            nonlocal menu_y
+            if color != 'normal':
+                self.stdscr.attron(curses.color_pair(self.color_pairs[color]))
+            self.stdscr.addstr(menu_y, 0, f"{label}: ")
+            if color != 'normal':
+                self.stdscr.attroff(curses.color_pair(self.color_pairs[color]))
+            self.stdscr.addstr(menu_y, len(label)+2, f"{value}".ljust(left_width - len(label) - 3))
+            menu_y += 1
+
+        # Show settings
+        menu_item("App", self.app_path or "(not set)", 'warning' if not self.app_path else 'normal')
+        menu_item("Target", self.target_lang)
+        menu_item("Model", self.model_path)
+        menu_item("AI", "ON" if self.use_ai else "OFF", 'success' if self.use_ai else 'warning')
+        menu_item("Output", self.output_dir)
+
+        menu_y += 1
+        self.stdscr.addstr(menu_y, 0, " [A] Select App ")
+        self.stdscr.addstr(menu_y+1, 0, " [T] Target Language ")
+        self.stdscr.addstr(menu_y+2, 0, " [M] Model File ")
+        self.stdscr.addstr(menu_y+3, 0, " [I] Toggle AI ")
+        self.stdscr.addstr(menu_y+4, 0, " [O] Output Dir ")
+        self.stdscr.addstr(menu_y+5, 0, " [S] Start Conversion ")
+        self.stdscr.addstr(menu_y+6, 0, " [Q] Quit ")
+
+        # Right side: progress bar and log
+        log_x = left_width + 1
+        log_y = 2
+        log_height = height - 7  # leave room for progress bar
+
+        # Draw a border around log area
+        if log_height > 0 and right_width > 10:
+            self.stdscr.attron(curses.color_pair(self.color_pairs['normal']))
+            self.stdscr.vline(log_y, log_x, curses.ACS_VLINE, log_height)
+            self.stdscr.addch(log_y, log_x, curses.ACS_ULCORNER)
+            self.stdscr.addch(log_y+log_height-1, log_x, curses.ACS_LLCORNER)
+            self.stdscr.addch(log_y, log_x+right_width-1, curses.ACS_URCORNER)
+            self.stdscr.addch(log_y+log_height-1, log_x+right_width-1, curses.ACS_LRCORNER)
+            self.stdscr.hline(log_y, log_x+1, curses.ACS_HLINE, right_width-2)
+            self.stdscr.hline(log_y+log_height-1, log_x+1, curses.ACS_HLINE, right_width-2)
+            # log window content
+            log_inner = curses.newwin(log_height-2, right_width-2, log_y+1, log_x+1)
+            log_inner.attron(curses.color_pair(self.color_pairs['normal']))
+            # Show log lines (scrollable)
+            start = max(0, len(self.log_lines) - (log_height-2))
+            for i, line in enumerate(self.log_lines[start:]):
+                if i < log_height-2:
+                    try:
+                        log_inner.addstr(i, 0, line[:right_width-2])
+                    except:
+                        pass
+            log_inner.refresh()
+
+        # Progress bar at bottom
+        prog_y = height - 3
+        if self.progress_percent > 0:
+            bar_len = right_width - 4
+            filled = int(bar_len * self.progress_percent / 100)
+            bar = '[' + '#' * filled + '-' * (bar_len - filled) + ']'
+            self.stdscr.attron(curses.color_pair(self.color_pairs['progress']) | curses.A_BOLD)
+            self.stdscr.addstr(prog_y, log_x+1, f"{self.progress_stage}: {bar} {self.progress_percent}%")
+            self.stdscr.attroff(curses.color_pair(self.color_pairs['progress']) | curses.A_BOLD)
+        else:
+            self.stdscr.addstr(prog_y, log_x+1, "Ready.")
+
+        # Status line
+        status_y = height - 1
+        status = "Press 'S' to start conversion, 'Q' to quit."
+        if self.conversion_in_progress:
+            status = "Conversion in progress... please wait."
+        self.stdscr.attron(curses.color_pair(self.color_pairs['highlight']))
+        self.stdscr.addstr(status_y, 0, status.ljust(width))
+        self.stdscr.attroff(curses.color_pair(self.color_pairs['highlight']))
+
+        self.stdscr.refresh()
+
+    # ------------------- Input Handling -------------------
+    def handle_input(self, key):
+        if key == ord('q') or key == ord('Q'):
+            self.running = False
+        elif key == ord('s') or key == ord('S'):
+            self.start_conversion()
+        elif key == ord('a') or key == ord('A'):
+            self.prompt_for_app()
+        elif key == ord('t') or key == ord('T'):
+            self.prompt_for_target()
+        elif key == ord('m') or key == ord('M'):
+            self.prompt_for_model()
+        elif key == ord('i') or key == ord('I'):
+            self.use_ai = not self.use_ai
+        elif key == ord('o') or key == ord('O'):
+            self.prompt_for_output()
+
+    # ------------------- Prompts -------------------
+    def prompt_for_app(self):
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, "Enter path to application file: ")
+        curses.echo()
+        path = self.stdscr.getstr(1, 0, 80).decode('utf-8')
+        curses.noecho()
+        if os.path.exists(path):
+            self.app_path = path
+        else:
+            self.log_lines.append(f"File not found: {path}")
+
+    def prompt_for_target(self):
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, "Enter target language (python, javascript, java, cpp, etc.): ")
+        curses.echo()
+        lang = self.stdscr.getstr(1, 0, 20).decode('utf-8').strip()
+        curses.noecho()
+        if lang:
+            self.target_lang = lang
+
+    def prompt_for_model(self):
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, "Enter path to GGUF model file: ")
+        curses.echo()
+        path = self.stdscr.getstr(1, 0, 120).decode('utf-8')
+        curses.noecho()
+        if os.path.exists(path):
+            self.model_path = path
+        else:
+            self.log_lines.append(f"Model not found: {path}")
+
+    def prompt_for_output(self):
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, "Enter output directory (default: ./converted): ")
+        curses.echo()
+        out = self.stdscr.getstr(1, 0, 80).decode('utf-8').strip()
+        curses.noecho()
+        if out:
+            self.output_dir = out
+
+    # ------------------- Conversion Thread -------------------
+    def start_conversion(self):
+        if self.conversion_in_progress:
+            return
+        if not self.app_path:
+            self.log_lines.append("Please select an application first.")
+            return
+        if not os.path.exists(self.app_path):
+            self.log_lines.append(f"Application not found: {self.app_path}")
+            return
+
+        self.conversion_in_progress = True
+        self.log_lines = []
+        self.progress_stage = ""
+        self.progress_percent = 0
+
+        def worker():
+            engine = ConverterEngine(self.model_path, self.use_ai)
+            try:
+                result = engine.convert(
+                    self.app_path,
+                    self.target_lang,
+                    self.output_dir,
+                    progress_callback=self.on_progress,
+                    log_callback=self.on_log
+                )
+                self.conversion_result = result
+                self.log_lines.append("✅ Conversion finished successfully!")
+                self.log_lines.append(f"Output written to: {self.output_dir}")
+            except Exception as e:
+                self.on_log(f"❌ Conversion failed: {e}")
+            finally:
+                self.conversion_in_progress = False
+
+        self.conversion_thread = threading.Thread(target=worker, daemon=True)
+        self.conversion_thread.start()
+
+    def on_progress(self, stage: str, percent: float):
+        self.progress_stage = stage
+        self.progress_percent = percent
+
+    def on_log(self, msg: str):
+        self.log_lines.append(msg)
+        if len(self.log_lines) > self.max_log_lines:
+            self.log_lines = self.log_lines[-self.max_log_lines:]
+
+    # ------------------- Main Loop -------------------
+    def run(self, stdscr):
+        self.stdscr = stdscr
+        curses.curs_set(0)  # hide cursor
+        self.init_colors()
+
+        while self.running:
+            self.draw()
+            # Check for window resize (KEY_RESIZE)
+            try:
+                key = self.stdscr.getch()
+            except KeyboardInterrupt:
+                break
+            if key == curses.KEY_RESIZE:
+                continue
+            if key != -1:
+                self.handle_input(key)
+
+            # Process any pending log/progress messages (already handled via callbacks)
+            # The callbacks directly update the log_lines and progress variables.
+            time.sleep(0.1)  # small delay to reduce CPU
+
+        # Cleanup
+        self.stdscr.clear()
+        self.stdscr.addstr(0, 0, "Goodbye!")
+        self.stdscr.refresh()
+        time.sleep(1)
+
+# ===================================================================
+# Entry point
+# ===================================================================
+
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="Universal Application Converter with local GGUF AI",
-        epilog="Place your .gguf model in the same directory or specify --model."
-    )
-    parser.add_argument("app", help="Path to the application file (e.g., .exe, .apk, .py, .js)")
-    parser.add_argument("--target", default="python", help="Target language (python, javascript, java, cpp, etc.)")
-    parser.add_argument("--model", default="codellama-7b-instruct.Q4_K_M.gguf", help="Path to GGUF model file")
-    parser.add_argument("--output", default="./converted", help="Output directory for generated code")
-    parser.add_argument("--no-ai", action="store_true", help="Disable AI (use traditional heuristics)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
-    args = parser.parse_args()
-
-    if not os.path.exists(args.app):
-        logger.error(f"Application file '{args.app}' not found.")
-        sys.exit(1)
-
-    if not args.no_ai and not os.path.exists(args.model):
-        logger.error(f"Model file '{args.model}' not found. Download a GGUF model or use --no-ai.")
-        sys.exit(1)
-
-    converter = AppConverter(
-        model_path=args.model,
-        use_ai=not args.no_ai,
-        verbose=args.verbose
-    )
-
+    ui = CursesUI()
     try:
-        result = converter.convert(args.app, args.target, args.output)
-        print("\n✅ Conversion complete!")
-        print(f"📁 Output directory: {args.output}")
-        print(f"📊 Confidence: {result['metadata']['confidence']:.2f}")
-        if result['analysis'].get('purpose'):
-            print(f"📝 Purpose inferred: {result['analysis']['purpose']}")
-        # Show generated files
-        print("\n📄 Generated files:")
-        for fname in result['files'].keys():
-            print(f"   - {fname}")
-    except Exception as e:
-        logger.error(f"Conversion failed: {e}")
-        sys.exit(1)
+        curses.wrapper(ui.run)
+    except KeyboardInterrupt:
+        pass
+    print("Exited.")
 
 if __name__ == "__main__":
     main()
