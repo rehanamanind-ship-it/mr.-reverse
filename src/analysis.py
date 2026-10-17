@@ -4,6 +4,22 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from llama_cpp import Llama
+    HAS_LLAMA = True
+except Exception:
+    Llama = None
+    HAS_LLAMA = False
+
+
+def load_model(model_path: str) -> Any:
+    if not model_path:
+        return None
+    if not HAS_LLAMA:
+        raise RuntimeError("llama-cpp-python is not installed. Install the dependency or use --no-ai.")
+    model = Llama(model_path=model_path, verbose=False)
+    return model
+
 
 def detect_magic(path: Path) -> str:
     try:
@@ -104,9 +120,21 @@ def infer_purpose(path: Path) -> str:
     return "General-purpose application"
 
 
-def analyze_file(path: Path, no_ai: bool = False) -> Dict[str, Any]:
+def analyze_file(path: Path, no_ai: bool = False, model_path: Optional[str] = None) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
+
+    model = None
+    status = "ai_disabled" if no_ai else "model_not_provided"
+    if not no_ai:
+        chosen_model = model_path or ""
+        if chosen_model:
+            try:
+                model = load_model(chosen_model)
+                status = "model_loaded"
+            except Exception as exc:
+                model = None
+                status = f"model_load_failed: {exc}"
 
     info = {
         "path": str(path),
@@ -116,6 +144,8 @@ def analyze_file(path: Path, no_ai: bool = False) -> Dict[str, Any]:
         "purpose": infer_purpose(path),
         "confidence": 0.78,
         "no_ai": no_ai,
+        "model_loaded": model is not None,
+        "model_status": status,
     }
     info["ai_mode"] = "heuristics-only" if no_ai else "ai-enabled"
     return info

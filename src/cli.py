@@ -54,7 +54,9 @@ def command_analyze(args: argparse.Namespace) -> int:
             print(f"error: File not found: {args.path}", file=sys.stderr)
         return 1
 
-    result = analyze_file(path, no_ai=args.no_ai)
+    cfg = load_config()
+    chosen_model = args.model or cfg.get("default_model") or ""
+    result = analyze_file(path, no_ai=args.no_ai, model_path=chosen_model)
     if args.json:
         print_json(result)
         return 0
@@ -64,6 +66,7 @@ def command_analyze(args: argparse.Namespace) -> int:
     if args.verbose:
         print(f"Source: {path}")
         print(f"Target: {args.target or 'default'}")
+        print(f"Model: {chosen_model or 'not provided'}")
     return 0
 
 
