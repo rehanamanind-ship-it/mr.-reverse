@@ -1,0 +1,85 @@
+Metadata-Version: 2.4
+Name: hrea
+Version: 1.0.0
+Summary: Heuravox Reverse Engineer Anything – offline AI-powered universal application converter
+Author: Rehan Aman
+License: MIT License
+        
+        Copyright (c) 2026 Rehan Aman
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Keywords: reverse-engineering,decompiler,ai,gguf,offline
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Software Development :: Disassemblers
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: click>=8.1
+Requires-Dist: pefile>=2023.2.7
+Requires-Dist: pyelftools>=0.29
+Requires-Dist: capstone>=5.0.0
+Requires-Dist: llama-cpp-python>=0.2.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: ruff>=0.4.0; extra == "dev"
+Requires-Dist: mypy>=1.8; extra == "dev"
+Requires-Dist: build>=1.0; extra == "dev"
+Dynamic: license-file
+
+# HREA
+
+HREA is a lightweight reverse-engineering and conversion CLI designed to detect binary characteristics, analyze file intent, and generate placeholder conversion output for a target language.
+
+## Installation
+
+```bash
+pip install hrea-1.0.0-py3-none-any.whl
+```
+
+After installation, the CLI is available as:
+
+```bash
+hrea --help
+```
+
+## Features
+
+- Analyze a file for type, architecture, packer, and purpose
+- Detect script/binary metadata
+- Convert a target binary into a scaffolded source file
+- Read and write configuration values with `hrea config`
+- Run environment checks with `hrea doctor`
+
+## Commands
+
+```bash
+hrea analyze ./example.exe --json
+hrea detect ./example.exe
+hrea convert ./example.exe -t python -o ./out --json
+hrea doctor
+hrea config set default_target js
+```
+
+## Notes
+
+This project is intentionally dependency-light and stdout-friendly for scripting and CI pipelines.
