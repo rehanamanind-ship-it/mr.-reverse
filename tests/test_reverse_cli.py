@@ -58,6 +58,22 @@ def test_doctor_json(capsys):
     assert "tools" in payload
 
 
+def test_model_loading_path(tmp_path, monkeypatch):
+    sample = tmp_path / "sample.bin"
+    sample.write_bytes(b"MZ\x00\x00\x00\x00")
+    called = {}
+
+    def fake_load_model(model_path):
+        called["path"] = model_path
+        return {"loaded": True, "model_path": model_path}
+
+    monkeypatch.setattr("src.analysis.load_model", fake_load_model)
+
+    payload = reverse.main(["analyze", str(sample), "--model", "/tmp/test-model.gguf", "--json"])
+    assert payload == 0
+    assert called["path"] == "/tmp/test-model.gguf"
+
+
 def test_helpers_and_generator():
     assert reverse.detect_magic(__import__("pathlib").Path("/etc/hosts")) == "unknown"
     assert reverse.detect_architecture(__import__("pathlib").Path("/etc/hosts")) == "unknown"
