@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 APP_NAME = "hrea"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 TARGET_CHOICES = ["python", "js", "java", "cpp", "c", "rust", "go", "asm"]
 
 CONFIG_DIR = Path.home() / ".config" / "hrea"

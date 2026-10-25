@@ -1,0 +1,27 @@
+# HREA src functional requirements
+# Format: requirement_id: requirement description
+
+load_model: load_model loads a configured GGUF model through llama_cpp and reports a clear error when the dependency is unavailable.
+detect_magic: detect_magic identifies PE, ELF, Mach-O, script, empty, and unknown file formats.
+detect_architecture: detect_architecture identifies supported PE, ELF, and Mach-O architectures and returns unknown for unrecognized files.
+detect_packer: detect_packer scans file content for known packer markers and returns none when no marker is present.
+infer_purpose: infer_purpose classifies files using the documented purpose heuristics and returns a general-purpose fallback.
+analyze_file: analyze_file validates the input path, performs static analysis, and reports AI/model status in its result.
+render_analysis_text: render_analysis_text renders analysis results as labeled plain-text lines.
+generate_conversion_files: generate_conversion_files creates the target-language placeholder output and README in the requested directory.
+tool_status: tool_status reports whether a named executable is available on PATH.
+list_tools: list_tools reports the availability of reverse-engineering tools and llama-cpp-python.
+doctor_status: doctor_status returns Python, platform, tool availability, and missing-tool information.
+load_config: load_config reads the user configuration and supplies defaults when it is absent or invalid.
+save_config: save_config persists configuration values under the user config directory.
+print_json: print_json emits one deterministic JSON object for machine-readable CLI output.
+ensure_output_dir: ensure_output_dir creates and returns the requested output directory.
+config_command: config_command supports config set, get, and list operations with JSON and text output.
+command_analyze: command_analyze runs file analysis while applying the explicit model flag before the configured default model.
+command_detect: command_detect returns file type, architecture, packer, and purpose information.
+command_convert: command_convert creates conversion output and reports the generated files.
+command_list_tools: command_list_tools displays available tool status in text or JSON.
+command_doctor: command_doctor reports environment diagnostics in text or JSON.
+command_version: command_version reports the application name and version.
+build_parser: build_parser defines the documented HREA subcommands and common CLI flags.
+main: main dispatches CLI commands and returns meaningful exit codes for success, user errors, interrupts, and internal errors.
